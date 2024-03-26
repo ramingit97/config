@@ -1,0 +1,343 @@
+version: '3.7'
+
+x-kafka-common: &kafka-common
+  image: 'bitnami/kafka:latest'
+  ports:
+    - "9092"
+  networks:
+    - kafka_network
+
+x-kafka-env-common: &kafka-env-common
+  ALLOW_PLAINTEXT_LISTENER: 'yes'
+  KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: 'true'
+  KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka-0:9093,1@kafka-1:9093
+  KAFKA_KRAFT_CLUSTER_ID: abcdefghijklmnopqrstuv
+  KAFKA_CFG_PROCESS_ROLES: controller,broker
+  KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+  EXTRA_ARGS: "-Xms128m -Xmx256m"
+
+services:
+
+  kafka-0:
+    <<: *kafka-common
+    environment:
+      <<: *kafka-env-common
+      KAFKA_CFG_NODE_ID: 0
+    volumes:
+      - kafka_0_data:/bitnami/kafka
+
+  kafka-1:
+    <<: *kafka-common
+    environment:
+      <<: *kafka-env-common
+      KAFKA_CFG_NODE_ID: 1
+    volumes:
+      - kafka_1_data:/bitnami/kafka
+
+
+  kafka-ui:
+    container_name: kafka-ui
+    image: provectuslabs/kafka-ui:latest
+    volumes:
+      - ./config.yml:/etc/kafkaui/dynamic_config.yaml
+    environment:
+      DYNAMIC_CONFIG_ENABLED: 'true'
+    depends_on:
+      - kafka-0
+      - kafka-1
+    networks:
+      - kafka_network
+    ports:
+      - '8080:8080'
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider localhost:8080 || exit 1
+      interval: 5s
+      timeout: 10s
+      retries: 1
+      start_period: 30s   
+
+    container_name: kafka-ui
+    image: provectuslabs/kafka-ui:latest
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    volumes:
+      - ./config.yml:/etc/kafkaui/dynamic_config.yaml
+    environment:
+      DYNAMIC_CONFIG_ENABLED: 'true'
+    depends_on:
+      - kafka-0
+      - kafka-1
+    networks:
+      - kafka_network
+    ports:
+      - '8080:8080'
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider localhost:8080 || exit 1
+      interval: 5s
+      timeout: 10s
+      retries: 3
+      start_period: 30s      
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    networks:
+      - api-gateway-network
+      - post-network
+      - order-network
+      - node-network
+      - post-network2
+    ports:
+      - "5674:5672"
+      - "15673:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest  
+
+
+  post-db:
+    image: postgres
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure 
+    networks:
+      - post-network
+    environment:
+      POSTGRES_DB: postdb
+      POSTGRES_USER: postuser
+      POSTGRES_PASSWORD: postpassword
+    # ports:
+      # - "5434:5432"
+  
+  post-service:
+    image: post
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure 
+    networks:
+      - post-network
+      - kafka_network
+    depends_on:
+      - post-db
+      - rabbitmq
+      - kafka-0
+      - kafka-1
+    environment:
+      TYPEORM_HOST: post-db
+      TYPEORM_PORT: 5432
+      TYPEORM_USERNAME: postuser
+      TYPEORM_PASSWORD: postpassword
+      TYPEORM_DATABASE: postdb
+    volumes:
+    - ./post:/app
+
+
+  order-db:
+    image: postgres
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure 
+    networks:
+      - order-network
+    environment:
+      POSTGRES_DB: orderdb
+      POSTGRES_USER: orderuser
+      POSTGRES_PASSWORD: orderpassword
+    ports:
+      - "5438:5432"
+  
+  order-service:
+    image: orders
+    networks:
+      - order-network
+      - kafka_network
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure     
+    depends_on:
+      - order-db
+      - rabbitmq
+      - kafka-0
+      - kafka-1
+    environment:
+      TYPEORM_HOST: order-db
+      TYPEORM_PORT: 5432
+      TYPEORM_USERNAME: orderuser
+      TYPEORM_PASSWORD: orderpassword
+      TYPEORM_DATABASE: orderdb
+    volumes:
+    - ./orders:/app        
+
+  user-db:
+    image: postgres
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure 
+    networks:
+      - user-network
+    environment:
+      POSTGRES_DB: userdb
+      POSTGRES_USER: useruser
+      POSTGRES_PASSWORD: userpassword
+    ports:
+      - "5435:5432"
+
+  user-service:
+    image: auth
+    networks:
+      - user-network
+    depends_on:
+      - user-db
+    environment:
+      TYPEORM_HOST: user-db
+      TYPEORM_PORT: 5432
+      TYPEORM_USERNAME: useruser
+      TYPEORM_PASSWORD: userpassword
+      TYPEORM_DATABASE: userdb
+    volumes:
+    - ./auth:/app  
+
+
+  # postgres:
+  #   image: postgres:latest
+  #   environment:
+  #     POSTGRES_DB: test_erp
+  #     TYPEORM_TYPE: postgres
+  #     POSTGRES_USER: postgres
+  #     POSTGRES_PASSWORD: postgres
+  #   ports:
+  #     - "5439:5432"
+  #   networks:
+  #     - node-network 
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+
+  nodejs:
+    image: node1
+    depends_on:
+      - post-db
+      - rabbitmq
+    networks:
+      - post-network  
+    environment:
+      DATABASE_URL: postgres://postuser:postpassword@post-db:5432/postdb
+      TYPEORM_HOST: post-db
+      TYPEORM_PORT: 5432
+      TYPEORM_USERNAME: postuser
+      TYPEORM_PASSWORD: postpassword
+      TYPEORM_DATABASE: postdb
+    ports:
+      - "8000:8000" 
+    volumes:
+    - ./node_project1:/app       
+
+  api-gateway:
+    image: api_gateway
+    depends_on:
+      - rabbitmq
+      - kafka-0
+      - kafka-1
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure  
+    networks:
+      - api-gateway-network
+      - post-network
+      - user-network
+      - order-network
+      - node-network 
+      - post-network2
+      - kafka_network
+    ports:
+      - "3000:3000"
+    volumes:
+    - ./api-gateway:/app
+
+  
+  post-db2:
+    image: postgres
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure 
+    networks:
+      - post-network2
+    environment:
+      POSTGRES_DB: postdb
+      POSTGRES_USER: postuser
+      POSTGRES_PASSWORD: postpassword
+    # ports:
+      # - "5434:5432"
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    networks:
+      - post-network2
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: myadminuser
+      MONGO_INITDB_ROOT_PASSWORD: myadminpassword
+      MONGO_INITDB_DATABASE: mydatabase
+    volumes:
+      - mongodb_data:/data/db
+
+
+  
+  post-service2:
+    image: post2
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure 
+    networks:
+      - post-network2
+    depends_on:
+      - post-db2
+      - mongodb
+      - rabbitmq
+    environment:
+      TYPEORM_HOST: post-db2
+      TYPEORM_PORT: 5432
+      TYPEORM_USERNAME: postuser
+      TYPEORM_PASSWORD: postpassword
+      TYPEORM_DATABASE: postdb
+
+      TYPEORM_HOST2: mongodb
+      TYPEORM_PORT2: 27017
+      TYPEORM_USERNAME2: myadminuser
+      TYPEORM_PASSWORD2: myadminpassword
+      TYPEORM_DATABASE2: mydatabase
+    volumes:
+    - ./post2:/app   
+
+    
+
+networks:
+  post-network:
+  post-network2:
+  order-network:
+  user-network:
+  api-gateway-network:
+  node-network:
+  kafka_network:
+
+
+volumes:
+  rabbitmq_data:
+  postgres_data:
+  mongodb_data:
+    driver: local
+  kafka_0_data:
+    driver: local
+  kafka_1_data:
+    driver: local  

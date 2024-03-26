@@ -1,0 +1,241 @@
+version: '3'
+services:
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    networks:
+      - api-gateway-network
+      - post-network
+      - order-network
+      - node-network
+      - post-network2
+    ports:
+      - "5674:5672"
+      - "15673:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest  
+
+
+  post-db:
+    image: postgres
+    restart: always
+    networks:
+      - post-network
+    environment:
+      POSTGRES_DB: postdb
+      POSTGRES_USER: postuser
+      POSTGRES_PASSWORD: postpassword
+    # ports:
+      # - "5434:5432"
+  
+  post-service:
+    build:
+      context: ./post
+      dockerfile: Dockerfile
+    restart: always
+    networks:
+      - post-network
+      - kafka_network
+    depends_on:
+      - post-db
+      - rabbitmq
+      - kafka-0
+      - kafka-1
+    environment:
+      TYPEORM_HOST: post-db
+      TYPEORM_PORT: 5432
+      TYPEORM_USERNAME: postuser
+      TYPEORM_PASSWORD: postpassword
+      TYPEORM_DATABASE: postdb
+    volumes:
+    - ./post:/app
+
+
+  order-db:
+    image: postgres
+    restart: always
+    networks:
+      - order-network
+    environment:
+      POSTGRES_DB: orderdb
+      POSTGRES_USER: orderuser
+      POSTGRES_PASSWORD: orderpassword
+    ports:
+      - "5438:5432"
+  
+  order-service:
+    build:
+      context: ./orders
+      dockerfile: Dockerfile
+    restart: always
+    networks:
+      - order-network
+      - kafka_network
+    depends_on:
+      - order-db
+      - rabbitmq
+      - kafka-0
+      - kafka-1
+    environment:
+      TYPEORM_HOST: order-db
+      TYPEORM_PORT: 5432
+      TYPEORM_USERNAME: orderuser
+      TYPEORM_PASSWORD: orderpassword
+      TYPEORM_DATABASE: orderdb
+    volumes:
+    - ./orders:/app        
+
+  user-db:
+    image: postgres
+    restart: always
+    networks:
+      - user-network
+    environment:
+      POSTGRES_DB: userdb
+      POSTGRES_USER: useruser
+      POSTGRES_PASSWORD: userpassword
+    ports:
+      - "5435:5432"
+
+  user-service:
+    build:
+      context: ./auth
+      dockerfile: Dockerfile
+    networks:
+      - user-network
+    depends_on:
+      - user-db
+    environment:
+      TYPEORM_HOST: user-db
+      TYPEORM_PORT: 5432
+      TYPEORM_USERNAME: useruser
+      TYPEORM_PASSWORD: userpassword
+      TYPEORM_DATABASE: userdb
+    volumes:
+    - ./auth:/app  
+
+
+  # postgres:
+  #   image: postgres:latest
+  #   environment:
+  #     POSTGRES_DB: test_erp
+  #     TYPEORM_TYPE: postgres
+  #     POSTGRES_USER: postgres
+  #     POSTGRES_PASSWORD: postgres
+  #   ports:
+  #     - "5439:5432"
+  #   networks:
+  #     - node-network 
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+
+  nodejs:
+    build:
+      context: ./node_project1
+      dockerfile: Dockerfile
+    depends_on:
+      - post-db
+      - rabbitmq
+    networks:
+      - post-network  
+    environment:
+      DATABASE_URL: postgres://postuser:postpassword@post-db:5432/postdb
+      TYPEORM_HOST: post-db
+      TYPEORM_PORT: 5432
+      TYPEORM_USERNAME: postuser
+      TYPEORM_PASSWORD: postpassword
+      TYPEORM_DATABASE: postdb
+    ports:
+      - "8000:8000" 
+    volumes:
+    - ./node_project1:/app       
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    networks:
+      - api-gateway-network
+      - post-network
+      - user-network
+      - order-network
+      - node-network 
+      - post-network2
+      - kafka_network
+    ports:
+      - "3000:3000"
+    volumes:
+    - ./api-gateway:/app
+
+  
+  post-db2:
+    image: postgres
+    restart: always
+    networks:
+      - post-network2
+    environment:
+      POSTGRES_DB: postdb
+      POSTGRES_USER: postuser
+      POSTGRES_PASSWORD: postpassword
+    # ports:
+      # - "5434:5432"
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    networks:
+      - post-network2
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: myadminuser
+      MONGO_INITDB_ROOT_PASSWORD: myadminpassword
+      MONGO_INITDB_DATABASE: mydatabase
+    volumes:
+      - mongodb_data:/data/db
+
+
+  
+  post-service2:
+    build:
+      context: ./post2
+      dockerfile: Dockerfile
+    restart: always
+    networks:
+      - post-network2
+    depends_on:
+      - post-db2
+      - mongodb
+      - rabbitmq
+    environment:
+      TYPEORM_HOST: post-db2
+      TYPEORM_PORT: 5432
+      TYPEORM_USERNAME: postuser
+      TYPEORM_PASSWORD: postpassword
+      TYPEORM_DATABASE: postdb
+
+      TYPEORM_HOST2: mongodb
+      TYPEORM_PORT2: 27017
+      TYPEORM_USERNAME2: myadminuser
+      TYPEORM_PASSWORD2: myadminpassword
+      TYPEORM_DATABASE2: mydatabase
+    volumes:
+    - ./post2:/app       
+    
+
+networks:
+  post-network:
+  post-network2:
+  order-network:
+  user-network:
+  api-gateway-network:
+  node-network:
+  kafka_network:
+
+
+volumes:
+  rabbitmq_data:
+  postgres_data:
+  mongodb_data:
+    driver: local
