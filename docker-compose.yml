@@ -106,6 +106,7 @@ services:
       dockerfile: Dockerfile
     networks:
       - user-network
+      - kafka_network
     depends_on:
       - user-db
     environment:
@@ -185,7 +186,7 @@ services:
   mongodb:
     image: mongo:latest
     ports:
-      - "27017:27017"
+      - "27018:27017"
     networks:
       - post-network2
     environment:
@@ -204,10 +205,13 @@ services:
     restart: always
     networks:
       - post-network2
+      - kafka_network
     depends_on:
       - post-db2
       - mongodb
       - rabbitmq
+      - kafka-0
+      - kafka-1
     environment:
       TYPEORM_HOST: post-db2
       TYPEORM_PORT: 5432
